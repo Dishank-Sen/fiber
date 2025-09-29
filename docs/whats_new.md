@@ -328,18 +328,17 @@ In `v2` one handler was already mandatory when the route has been registered, bu
 
 ### Route chaining
 
-The route method is now like [`Express`](https://expressjs.com/de/api.html#app.route) which gives you the option of a different notation and allows you to concatenate the route declaration.
+This release introduces a dedicated `RouteChain` helper, inspired by [`Express`](https://expressjs.com/en/api.html#app.route), for declaring a stack of handlers on the same path. The original `Route` helper for prefix encapsulation also remains available.
 
-```diff
--    Route(prefix string, fn func(router Router), name ...string) Router
-+    Route(path string) Register
+```go
+RouteChain(path string) Register
 ```
 
 <details>
 <summary>Example</summary>
 
 ```go
-app.Route("/api").Route("/user/:id?")
+app.RouteChain("/api").RouteChain("/user/:id?")
     .Get(func(c fiber.Ctx) error {
         // Get user
         return c.JSON(fiber.Map{"message": "Get user", "id": c.Params("id")})
@@ -360,11 +359,11 @@ app.Route("/api").Route("/user/:id?")
 
 </details>
 
-You can find more information about `app.Route` in the [API documentation](./api/app#route).
+You can find more information about `app.RouteChain` and `app.Route` in the API documentation ([RouteChain](./api/app#routechain), [Route](./api/app#route)).
 
 ### Middleware registration
 
-We have aligned our method for middlewares closer to [`Express`](https://expressjs.com/de/api.html#app.use) and now also support the [`Use`](./api/app#use) of multiple prefixes.
+We have aligned our method for middlewares closer to [`Express`](https://expressjs.com/en/api.html#app.use) and now also support the [`Use`](./api/app#use) of multiple prefixes.
 
 Prefix matching is now stricter: partial matches must end at a slash boundary (or be an exact match). This keeps `/api` middleware from running on `/apiv1` while still allowing `/api/:version` style patterns that leverage route parameters, optional segments, or wildcards.
 
@@ -1161,6 +1160,8 @@ We are excited to introduce a new option in our caching middleware: Cache Invali
 Additionally, the caching middleware has been optimized to avoid caching non-cacheable status codes, as defined by the [HTTP standards](https://datatracker.ietf.org/doc/html/rfc7231#section-6.1). This improvement enhances cache accuracy and reduces unnecessary cache storage usage.
 Cached responses now include an RFC-compliant Age header, providing a standardized indication of how long a response has been stored in cache since it was originally generated. This enhancement improves HTTP compliance and facilitates better client-side caching strategies.
 
+Cache keys are now redacted in logs and error messages by default, and a `DisableValueRedaction` boolean (default `false`) lets you opt out when you need the raw value for troubleshooting.
+
 :::note
 The deprecated `Store` and `Key` options have been removed in v3. Use `Storage` and `KeyGenerator` instead.
 :::
@@ -1182,6 +1183,8 @@ We've updated several fields from a single string (containing comma-separated va
 - `Config.AllowHeaders`: Now accepts a slice of strings, each representing an allowed header.
 - `Config.ExposeHeaders`: Now accepts a slice of strings, each representing an exposed header.
 
+Additionally, panic messages and logs redact misconfigured origins by default, and a `DisableValueRedaction` flag (default `false`) lets you reveal them when necessary.
+
 ### Compression
 
 - Added support for `zstd` compression alongside `gzip`, `deflate`, and `brotli`.
@@ -1193,6 +1196,12 @@ We've updated several fields from a single string (containing comma-separated va
 ### CSRF
 
 The `Expiration` field in the CSRF middleware configuration has been renamed to `IdleTimeout` to better describe its functionality. Additionally, the default value has been reduced from 1 hour to 30 minutes.
+
+CSRF now redacts tokens and storage keys by default and exposes a `DisableValueRedaction` toggle (default `false`) if you must surface those values in diagnostics.
+
+### Idempotency
+
+Idempotency middleware now redacts keys by default and offers a `DisableValueRedaction` configuration flag (default `false`) to expose them when debugging.
 
 ### EncryptCookie
 
@@ -1383,6 +1392,8 @@ See more in [Logger](./middleware/logger.md#predefined-formats)
 ### Limiter
 
 The limiter middleware uses a new Fixed Window Rate Limiter implementation.
+
+Limiter now redacts request keys in error paths by default. A new `DisableValueRedaction` boolean (default `false`) lets you reveal the raw limiter key if diagnostics require it.
 
 :::note
 Deprecated fields `Duration`, `Store`, and `Key` have been removed in v3. Use `Expiration`, `Storage`, and `KeyGenerator` instead.
@@ -1641,7 +1652,7 @@ app.Add([]string{fiber.MethodPost}, "/api", myHandler)
 
 #### Mounting
 
-In Fiber v3, the `Mount` method has been removed. Instead, you can use the `Use` method to achieve similar functionality.
+In this release, the `Mount` method has been removed. Instead, you can use the `Use` method to achieve similar functionality.
 
 ```go
 // Before
@@ -1655,7 +1666,7 @@ app.Use("/api", apiApp)
 
 #### Route Chaining
 
-Refer to the [route chaining](#route-chaining) section for details on migrating `Route`.
+Refer to the [route chaining](#route-chaining) section for details on the new `RouteChain` helper. The `Route` function now matches its v2 behavior for prefix encapsulation.
 
 ```go
 // Before
@@ -1675,7 +1686,7 @@ app.Route("/api", func(apiGrp Router) {
 
 ```go
 // After
-app.Route("/api").Route("/user/:id?")
+app.RouteChain("/api").RouteChain("/user/:id?")
     .Get(func(c fiber.Ctx) error {
         // Get user
         return c.JSON(fiber.Map{"message": "Get user", "id": c.Params("id")})
@@ -2212,6 +2223,7 @@ app.Use(csrf.New(csrf.Config{
 - **Session Key Removal**: The `SessionKey` field has been removed from the CSRF middleware configuration. The session key is now an unexported constant within the middleware to avoid potential key collisions in the session store.
 
 - **KeyLookup Field Removal**: The `KeyLookup` field has been removed from the CSRF middleware configuration. This field was deprecated and is no longer needed as the middleware now uses a more secure approach for token management.
+- **DisableValueRedaction Toggle**: CSRF redacts tokens and storage keys by default; set `DisableValueRedaction` to `true` when diagnostics require the raw values.
 
 ```go
 // Before
@@ -2246,6 +2258,10 @@ app.Use(csrf.New(csrf.Config{
 ```
 
 **Security Note**: The removal of `FromCookie` prevents a common misconfiguration that would completely bypass CSRF protection. The middleware uses the Double Submit Cookie pattern, which requires the token to be submitted through a different channel than the cookie to provide meaningful protection.
+
+#### Idempotency
+
+- **DisableValueRedaction Toggle**: The idempotency middleware now hides keys in logs and error paths by default, with a `DisableValueRedaction` boolean (default `false`) to reveal them when needed.
 
 #### Timeout
 
